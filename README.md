@@ -187,7 +187,6 @@ Potential extensions include:
 
 * Add daily skew snapshot logging
 * Build a custom historical skew dataset over time
-* Compare calculated IV against Yahoo-provided IV
 * Add term structure analysis across expirations
 * Add interpolation or smoothing across strikes
 * Add transaction cost and slippage modeling
