@@ -1,108 +1,102 @@
-# SPY Volatility Skew Monitor and Delta-Hedged Risk Reversal Constructor
+# SPY Volatility Skew Monitor
 
-This project builds a live options analytics system for analyzing SPY volatility skew and constructing a delta-hedged risk reversal trade. The system pulls live options chain data, calculates bid/ask midpoint prices, solves for implied volatility using a Newton-Raphson method, visualizes the volatility skew across strikes, and constructs a trade that sells rich downside volatility, buys upside convexity, and hedges directional exposure with shares of SPY.
+A Python-based options analytics project that builds a live SPY volatility skew, solves for implied volatility using Newton-Raphson, and constructs a delta-hedged risk reversal trade designed to isolate volatility skew exposure.
 
-## Project Motivation
+## Overview
 
-The Black-Scholes model assumes a constant volatility input across strikes and expirations. In real options markets, implied volatility is not flat. Equity index options often display downside skew, where out-of-the-money (OTM) puts trade at higher implied volatility than comparable OTM calls. This reflects market demand for crash protection and creates a framework for studying relative volatility pricing across the options chain.
+This project analyzes the volatility skew in SPY options. In the Black-Scholes model, volatility is assumed to be constant across strikes, but real options markets often show a skew: out-of-the-money puts usually trade at higher implied volatility than out-of-the-money calls because investors pay a premium for downside protection.
 
-This project was built to explore that idea in a systematic way. Instead of only pricing one option, the system computes implied volatility across many strikes and uses that skew structure to construct a volatility-based trade.
+The project pulls live SPY options chain data, calculates implied volatility across strikes, visualizes the skew, and constructs a delta-hedged risk reversal trade by selling rich downside volatility, buying upside convexity, and hedging the net option delta with SPY shares.
 
-## Core Features
+## Key Features
 
 * Pulls live SPY options chain data using `yfinance`
-* Filters for OTM puts and calls to build a cleaner skew curve
+* Filters for out-of-the-money puts and calls
 * Uses bid/ask midpoint as the observed market option price
-* Prices European calls and puts with Black-Scholes
-* Computes Greeks including delta, gamma, and Vega
+* Implements Black-Scholes call and put pricing
+* Calculates option Greeks including delta, gamma, and Vega
 * Solves for implied volatility using Newton-Raphson iteration
-* Uses recent realized volatility as the initial guess for the IV solver
-* Builds and plots the calculated implied volatility skew across strikes
+* Uses rolling realized volatility as the initial IV guess
+* Builds and plots the implied volatility skew across strikes
 * Calculates downside skew and risk reversal skew
-* Constructs a delta-hedged risk reversal trade:
+* Constructs a delta-hedged risk reversal:
 
   * Sell OTM put
   * Buy OTM call
-  * Hedge net option delta using SPY shares
+  * Hedge net delta with SPY shares
 
-## Strategy Concept
-
-The strategy focuses on identifying when downside skew appears rich. If OTM put implied volatility is meaningfully higher than OTM call implied volatility, the system constructs a risk reversal:
-
-1. Sell an OTM put to collect elevated downside volatility premium.
-2. Buy an OTM call to gain upside convexity.
-3. Calculate the net delta of the option position.
-4. Hedge with SPY shares to reduce directional exposure.
-
-The goal is not to make a simple bullish or bearish stock bet. The goal is to structure a trade around volatility skew while reducing first-order directional exposure through delta hedging.
-
-## File Structure
+## Project Structure
 
 ```text
-black_scholes.py      # Black-Scholes call and put pricing functions
-greeks.py             # Delta, gamma, and Vega calculations
-realized_vol.py       # Rolling realized volatility estimation
-price_data.py         # Historical SPY price data and log returns
-implied_vol.py        # Newton-Raphson implied volatility solver
-vol_surface.py        # Live options chain processing and skew construction
-skew_strategy.py      # Skew metrics and delta-hedged risk reversal construction
-requirements.txt      # Python package requirements
-README.md             # Project documentation
+spy-volatility-skew-monitor/
+│
+├── src/
+│   ├── black_scholes.py      # Black-Scholes call and put pricing
+│   ├── greeks.py             # Delta, gamma, and Vega calculations
+│   ├── implied_vol.py        # Newton-Raphson implied volatility solver
+│   ├── price_data.py         # Historical SPY price data and log returns
+│   ├── realized_vol.py       # Rolling realized volatility estimator
+│   ├── skew_strategy.py      # Skew metrics and risk reversal construction
+│   ├── vol_surface.py        # Live volatility skew builder and plotter
+│   └── main.py               # Main project entry point
+│
+├── README.md
+├── requirements.txt
+└── .gitignore
 ```
 
 ## Methodology
 
-### 1. Historical Price Data
+### 1. Market Price from Bid/Ask Midpoint
 
-The system pulls historical SPY price data and computes daily log returns. These returns are used to estimate rolling realized volatility, which serves as the initial volatility guess for the Newton-Raphson implied volatility solver.
-
-### 2. Implied Volatility Solver
-
-For each option, the market price is estimated using the bid/ask midpoint:
+For each option, the market price is estimated using the midpoint between the bid and ask:
 
 ```python
 market_price = (bid + ask) / 2
 ```
 
-The solver then finds the volatility value that makes the Black-Scholes theoretical price match the observed market price:
+This midpoint is treated as the observed market option price.
+
+### 2. Black-Scholes Theoretical Price
+
+The project uses Black-Scholes to calculate the theoretical value of European call and put options.
+
+The implied volatility solver repeatedly compares:
 
 ```text
-Black-Scholes Price(sigma) ≈ Market Mid Price
+Black-Scholes theoretical price - Market midpoint price
 ```
 
-The Newton-Raphson update is:
+The goal is to find the volatility input that makes the theoretical price match the market price.
+
+### 3. Newton-Raphson Implied Volatility Solver
+
+Implied volatility is solved using Newton-Raphson:
 
 ```text
 sigma_next = sigma - (theoretical_price - market_price) / Vega
 ```
 
-### 3. Volatility Skew Construction
+Vega is used because it measures how much the option price changes with respect to volatility.
 
-The system filters the options chain to use:
+### 4. Realized Volatility Initial Guess
 
-```text
-OTM puts where strike < spot price
-OTM calls where strike > spot price
-```
+The solver uses recent rolling realized volatility as the initial guess for implied volatility. This helps Newton-Raphson start from a realistic volatility estimate instead of an arbitrary number.
 
-This is done because OTM options are generally more liquid and better reflect current volatility pricing. The system then plots calculated implied volatility against strike price.
+### 5. Volatility Skew Construction
 
-### 4. Risk Reversal Construction
-
-The trade constructor selects:
+The project filters the options chain to focus on out-of-the-money options:
 
 ```text
-Put strike near 0.90 moneyness
-Call strike near 1.10 moneyness
+OTM puts: strike < spot price
+OTM calls: strike > spot price
 ```
 
-It then computes:
+It then calculates implied volatility for each contract and plots implied volatility against strike price.
 
-```text
-Risk Reversal Skew = OTM Put IV - OTM Call IV
-```
+### 6. Delta-Hedged Risk Reversal
 
-For the trade:
+The strategy module constructs a risk reversal when downside skew appears rich:
 
 ```text
 Sell OTM put
@@ -110,7 +104,7 @@ Buy OTM call
 Delta hedge with SPY shares
 ```
 
-The hedge is calculated as:
+The hedge is calculated using option deltas:
 
 ```text
 Hedge Shares = -Net Option Delta × 100 × Number of Contracts
@@ -120,64 +114,41 @@ A negative hedge share value means the strategy shorts SPY shares. A positive he
 
 ## Installation
 
-Clone the repository and install the required packages:
+Create and activate a virtual environment:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+Install dependencies:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-Required packages:
-
-```text
-numpy
-pandas
-scipy
-matplotlib
-yfinance
-```
-
 ## Usage
 
-To build and plot the live SPY volatility skew:
+Run the full live skew monitor and trade constructor:
 
 ```bash
-python vol_surface.py
+python src/main.py
 ```
 
-This will:
+This script will:
 
-1. Pull live SPY options data.
-2. Select an expiration date.
-3. Filter OTM puts and calls.
-4. Calculate implied volatility for each contract.
-5. Print the resulting skew DataFrame.
-6. Plot calculated IV against strike price.
-
-To construct the delta-hedged risk reversal trade, use the functions in `skew_strategy.py` with the skew DataFrame returned by `build_vol_skew()`.
-
-Example:
-
-```python
-from vol_surface import build_vol_skew
-from skew_strategy import construct_delta_hedged_risk_reversal
-
-skew = build_vol_skew(ticker="SPY")
-
-trade = construct_delta_hedged_risk_reversal(
-    skew_df=skew,
-    contracts=1,
-    put_moneyness=0.90,
-    call_moneyness=1.10,
-    risk_free_rate=0.05,
-)
-
-for key, value in trade.items():
-    print(f"{key}: {value}")
-```
+1. Pull live SPY options data
+2. Select an expiration date
+3. Filter for liquid OTM puts and calls
+4. Calculate implied volatility across strikes
+5. Save the skew data to CSV
+6. Calculate risk reversal skew
+7. Construct a delta-hedged risk reversal trade
+8. Plot the volatility skew
 
 ## Example Output
 
-The trade constructor returns a dictionary containing:
+The trade constructor returns information such as:
 
 ```text
 Trade
@@ -200,25 +171,42 @@ Net_Premium_Per_Share
 Net_Premium_Total
 ```
 
+## Important Note on Trade Execution
+
+This project does not execute live trades through a brokerage API. It constructs and analyzes the trade, including the option legs and required delta hedge. The output is intended for research, learning, and options strategy analysis.
+
 ## Limitations
 
-This project focuses on live options-chain analytics and trade construction. It does not include a full historical PnL backtest because free data sources such as `yfinance` do not provide reliable historical options chain data. A true backtest would require historical option quotes for the same contracts from entry to exit, including bid/ask prices, implied volatility, and Greeks.
+This project focuses on live options-chain analytics and trade construction. It does not include a full historical PnL backtest because free data sources such as `yfinance` do not provide reliable historical options chain data. A true historical backtest would require historical bid/ask quotes, implied volatilities, Greeks, and prices for the same option contracts from entry to exit.
 
-The system is designed so that historical options data could be added later if available through a paid or institutional data source.
+The code is structured so that historical options data could be added later if available through a paid or institutional data source.
 
 ## Future Improvements
 
 Potential extensions include:
 
-* Add daily snapshot logging to build a custom skew history dataset over time
+* Add daily skew snapshot logging
+* Build a custom historical skew dataset over time
 * Compare calculated IV against Yahoo-provided IV
 * Add term structure analysis across expirations
-* Add smoothing or interpolation across strikes
-* Add transaction cost and bid/ask slippage modeling
+* Add interpolation or smoothing across strikes
+* Add transaction cost and slippage modeling
 * Add dynamic delta hedging and rebalance logic
-* Build a dashboard for live skew monitoring
 * Integrate historical options data for true PnL backtesting
+* Build a dashboard for live skew monitoring
 
-## Resume Summary
+## Technologies Used
 
-Built a live SPY volatility skew monitor and delta-hedged risk reversal trade constructor in Python, using options-chain data, Black-Scholes pricing, Vega-based Newton-Raphson implied volatility solving, OTM option filtering, skew analysis, and Greek-based hedge sizing.
+* Python
+* NumPy
+* pandas
+* SciPy
+* matplotlib
+* yfinance
+
+## Author
+
+Christopher Munroe  
+University of Michigan  
+Mathematics of Finance and Risk Management  
+[LinkedIn](https://www.linkedin.com/in/chrismunroe12)
