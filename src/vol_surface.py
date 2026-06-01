@@ -8,6 +8,7 @@ calculates implied volatility using Newton-Raphson, and plots the skew.
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -200,8 +201,8 @@ def build_vol_skew(
 
     options = options[
         (options["Calculated_IV"].notna())
-        & (options["Calculated_IV"] > 0)
-        & (options["Calculated_IV"] < 5)
+        & (options["Calculated_IV"] > 0.03)
+        & (options["Calculated_IV"] < 2.00)
     ].copy()
 
     columns_to_keep = [
@@ -260,7 +261,12 @@ def plot_vol_skew(skew_df: pd.DataFrame) -> None:
     plt.ylabel("Calculated Implied Volatility")
     plt.legend()
     plt.grid(True)
+
+    Path("assets").mkdir(parents=True, exist_ok=True)
+    plt.savefig("assets/live_vol_skew_sample.png", dpi=300, bbox_inches="tight")
+
     plt.show()
+
 
 
 if __name__ == "__main__":

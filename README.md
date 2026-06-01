@@ -1,12 +1,14 @@
 # SPY Volatility Skew Monitor
 
-A Python-based options analytics project that builds a live SPY volatility skew, solves for implied volatility using Newton-Raphson, and constructs a delta-hedged risk reversal trade designed to isolate volatility skew exposure.
+A Python-based options analytics project that builds a live SPY volatility skew, solves for implied volatility using Newton-Raphson, constructs delta-hedged risk reversal trades, and includes a prototype historical backtest using contract-level options data.
 
 ## Overview
 
 This project analyzes the volatility skew in SPY options. In the Black-Scholes model, volatility is assumed to be constant across strikes, but real options markets often show a skew: out-of-the-money puts usually trade at higher implied volatility than out-of-the-money calls because investors pay a premium for downside protection.
 
-The project pulls live SPY options chain data, calculates implied volatility across strikes, visualizes the skew, and constructs a delta-hedged risk reversal trade by selling rich downside volatility, buying upside convexity, and hedging the net option delta with SPY shares.
+The project pulls live SPY options chain data, calculates implied volatility across strikes, visualizes the volatility skew, and constructs a delta-hedged risk reversal trade by selling rich downside volatility, buying upside convexity, and hedging net option delta with SPY shares.
+
+The project also includes a historical backtest engine that uses contract-level daily options aggregate bars to test Z-score entry and exit rules for the risk reversal strategy.
 
 ## Key Features
 
@@ -24,6 +26,8 @@ The project pulls live SPY options chain data, calculates implied volatility acr
   * Sell OTM put
   * Buy OTM call
   * Hedge net delta with SPY shares
+* Includes a historical backtest using downloaded contract-level options bars
+* Saves backtest outputs including equity curve, trade log, and skew history
 
 ## Project Structure
 
@@ -31,14 +35,20 @@ The project pulls live SPY options chain data, calculates implied volatility acr
 spy-volatility-skew-monitor/
 │
 ├── src/
-│   ├── black_scholes.py      # Black-Scholes call and put pricing
-│   ├── greeks.py             # Delta, gamma, and Vega calculations
-│   ├── implied_vol.py        # Newton-Raphson implied volatility solver
-│   ├── price_data.py         # Historical SPY price data and log returns
-│   ├── realized_vol.py       # Rolling realized volatility estimator
-│   ├── skew_strategy.py      # Skew metrics and risk reversal construction
-│   ├── vol_surface.py        # Live volatility skew builder and plotter
-│   └── main.py               # Main project entry point
+│   ├── black_scholes.py          # Black-Scholes call and put pricing
+│   ├── greeks.py                 # Delta, gamma, and Vega calculations
+│   ├── implied_vol.py            # Newton-Raphson implied volatility solver
+│   ├── price_data.py             # Historical SPY price data and log returns
+│   ├── realized_vol.py           # Rolling realized volatility estimator
+│   ├── skew_strategy.py          # Skew metrics, signals, and hedge sizing
+│   ├── vol_surface.py            # Live volatility skew builder and plotter
+│   ├── download_option_data.py   # Optional contract-level options data downloader
+│   ├── backtest.py               # Historical skew strategy backtest
+│   └── main.py                   # Main live project entry point
+│
+├── assets/
+│   ├── live_vol_skew_sample.png
+│   └── backtest_equity_curve.png
 │
 ├── README.md
 ├── requirements.txt
@@ -49,13 +59,13 @@ spy-volatility-skew-monitor/
 
 ### 1. Market Price from Bid/Ask Midpoint
 
-For each option, the market price is estimated using the midpoint between the bid and ask:
+For each live option, the market price is estimated using the midpoint between the bid and ask:
 
 ```python
 market_price = (bid + ask) / 2
 ```
 
-This midpoint is treated as the observed market option price.
+This midpoint is treated as the observed market option price. The midpoint is used instead of `lastPrice` because options often trade less frequently than stocks, making the last traded price potentially stale.
 
 ### 2. Black-Scholes Theoretical Price
 
@@ -67,7 +77,7 @@ The implied volatility solver repeatedly compares:
 Black-Scholes theoretical price - Market midpoint price
 ```
 
-The goal is to find the volatility input that makes the theoretical price match the market price.
+The goal is to find the volatility input that makes the theoretical option price match the observed market price.
 
 ### 3. Newton-Raphson Implied Volatility Solver
 
@@ -77,13 +87,9 @@ Implied volatility is solved using Newton-Raphson:
 sigma_next = sigma - (theoretical_price - market_price) / Vega
 ```
 
-Vega is used because it measures how much the option price changes with respect to volatility.
+Vega is used because it measures how much the option price changes with respect to volatility. The solver uses recent rolling realized volatility as the initial guess, which gives the iteration a realistic starting point.
 
-### 4. Realized Volatility Initial Guess
-
-The solver uses recent rolling realized volatility as the initial guess for implied volatility. This helps Newton-Raphson start from a realistic volatility estimate instead of an arbitrary number.
-
-### 5. Volatility Skew Construction
+### 4. Volatility Skew Construction
 
 The project filters the options chain to focus on out-of-the-money options:
 
@@ -94,7 +100,7 @@ OTM calls: strike > spot price
 
 It then calculates implied volatility for each contract and plots implied volatility against strike price.
 
-### 6. Delta-Hedged Risk Reversal
+### 5. Delta-Hedged Risk Reversal
 
 The strategy module constructs a risk reversal when downside skew appears rich:
 
@@ -146,7 +152,7 @@ This script will:
 7. Construct a delta-hedged risk reversal trade
 8. Plot the volatility skew
 
-## Example Output
+## Example Live Output
 
 The trade constructor returns information such as:
 
@@ -171,36 +177,98 @@ Net_Premium_Per_Share
 Net_Premium_Total
 ```
 
-## Important Note on Trade Execution
+## Sample Live Volatility Skew
 
-This project does not execute live trades through a brokerage API. It constructs and analyzes the trade, including the option legs and required delta hedge. The output is intended for research, learning, and options strategy analysis.
+The live monitor calculates implied volatility across current SPY option strikes and plots the resulting volatility skew. The example below shows the typical equity-index smirk shape, where out-of-the-money puts trade at higher implied volatility than out-of-the-money calls due to demand for downside protection.
+
+![Sample Live SPY Volatility Skew](assets/live_vol_skew_sample.png)
+
+The visible transition around spot reflects the construction method: the live skew uses OTM puts below spot and OTM calls above spot. Because live option-chain data can include bid/ask midpoint noise, stale quotes, dividend effects, and simplified Black-Scholes assumptions, the plot is intended as a practical skew monitor rather than a fully smoothed arbitrage-free volatility surface.
 
 ## Historical Backtest
 
 The project includes a prototype historical backtest using contract-level daily options aggregate bars. The backtest constructs a SPY risk reversal by selling an OTM put, buying an OTM call, and delta hedging with SPY shares at trade entry.
 
-Raw historical options CSVs are not included in this repository because they are locally downloaded market data. The backtest engine is structured to read local contract-level option files from `data/raw/options/`, which is excluded from Git tracking.
+The backtest uses:
 
-Initial sample results using one SPY expiration and a small strike grid generated 5 trades, all profitable, with a final portfolio value of $100,246.14 from $100,000 initial capital. This result is a prototype sample and not a production-grade strategy validation.
+```text
+Risk Reversal Skew = OTM Put IV - OTM Call IV
+```
+
+A rolling Z-score is calculated on this skew spread. The strategy enters when skew is unusually steep and exits when skew normalizes or when a maximum holding period is reached.
+
+### Backtest Logic
+
+```text
+Entry:
+- Skew Z-score > entry threshold
+- Sell selected OTM put
+- Buy selected OTM call
+- Delta hedge with SPY shares
+
+Exit:
+- Skew Z-score falls below exit threshold
+- Or maximum holding period is reached
+```
+
+Raw historical options CSVs are not included in this repository because they are locally downloaded market data. The backtest engine is structured to read local contract-level option files from:
+
+```text
+data/raw/options/
+```
+
+This folder is excluded from Git tracking.
+
+## Backtest Results
+
+Initial sample results used one SPY expiration and a small strike grid of OTM puts and calls.
+
+```text
+Initial Capital: $100,000.00
+Final Value:     $100,537.93
+Total Return:    0.54%
+Number of Trades: 5
+Win Rate:         100.00%
+Average PnL:      $107.59
+```
+
+These results are from a prototype sample and should not be interpreted as production-grade strategy validation. The current backtest does not yet include full bid/ask quote modeling, dynamic delta re-hedging, transaction costs, commissions, or margin requirements for short option positions.
+
+### Backtest Equity Curve
+
+![Backtest Equity Curve](assets/backtest_equity_curve.png)
+
+## Important Note on Trade Execution
+
+This project does not execute live trades through a brokerage API. It constructs and analyzes the trade, including the option legs and required delta hedge. The output is intended for research, learning, and options strategy analysis.
 
 ## Limitations
 
-This project focuses on live options-chain analytics and trade construction. It does not include a full historical PnL backtest because free data sources such as `yfinance` do not provide reliable historical options chain data. A true historical backtest would require historical bid/ask quotes, implied volatilities, Greeks, and prices for the same option contracts from entry to exit.
+This project includes a prototype historical backtest, but it is not a complete institutional-grade options strategy backtest.
 
-The code is structured so that historical options data could be added later if available through a paid or institutional data source.
+Current limitations include:
+
+* Historical backtest uses daily option aggregate bars rather than full bid/ask quote history
+* Raw market data is not included in the repository
+* Strategy is tested on a small initial SPY options sample
+* Transaction costs, commissions, slippage, and margin requirements are not fully modeled
+* Delta hedge is sized at trade entry rather than dynamically rebalanced every day
+* Results should be interpreted as a research prototype rather than a proven alpha strategy
 
 ## Future Improvements
 
 Potential extensions include:
 
-* Add daily skew snapshot logging
-* Build a custom historical skew dataset over time
+* Run broader parameter sweeps across entry Z-score, exit Z-score, holding period, and strike moneyness
+* Explore ways to increase profitability while preserving high win-rate and risk-controlled behavior
+* Add transaction cost, commission, slippage, and bid/ask spread modeling
+* Add dynamic delta hedging and daily hedge rebalancing logic
+* Compare hedged versus unhedged risk reversal performance
+* Estimate max drawdown and worst-trade loss with and without delta hedging
+* Expand testing across multiple expirations and larger strike grids
 * Add term structure analysis across expirations
 * Add interpolation or smoothing across strikes
-* Add transaction cost and slippage modeling
-* Add dynamic delta hedging and rebalance logic
-* Integrate historical options data for true PnL backtesting
-* Build a dashboard for live skew monitoring
+* Build a dashboard for live skew monitoring and backtest results
 
 ## Technologies Used
 
@@ -210,10 +278,12 @@ Potential extensions include:
 * SciPy
 * matplotlib
 * yfinance
+* python-dotenv
+* massive
 
 ## Author
 
-Christopher Munroe  
-University of Michigan  
-Mathematics of Finance and Risk Management  
+Christopher Munroe
+University of Michigan
+Mathematics of Finance and Risk Management
 [LinkedIn](https://www.linkedin.com/in/chrismunroe12)

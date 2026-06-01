@@ -11,6 +11,23 @@ import pandas as pd
 from greeks import call_delta, put_delta
 
 
+def get_option_price_from_row(row: pd.Series) -> float:
+    """
+    Return the best available option price from a row.
+
+    Live data uses Mid.
+    Historical aggregate data uses Option_Price.
+    """
+
+    if "Mid" in row and pd.notna(row["Mid"]):
+        return float(row["Mid"])
+
+    if "Option_Price" in row and pd.notna(row["Option_Price"]):
+        return float(row["Option_Price"])
+
+    raise ValueError("Row must contain either Mid or Option_Price.")
+
+
 def get_atm_iv(skew_df: pd.DataFrame) -> float:
     """
     Find the calculated IV of the option closest to ATM.
@@ -79,22 +96,100 @@ def generate_skew_signal(
     z_score: float,
     entry_threshold: float = 2.0,
     exit_threshold: float = 0.5,
+    in_position: bool = False,
 ) -> str:
     """
-    Generate simple skew trading signal.
+    Generate a position-aware skew trading signal.
+
+    Strategy logic:
+    - If no trade is open, enter when skew is unusually steep.
+    - If a trade is open, exit when skew normalizes.
+
+    For this strategy, a high positive Z-score means downside puts are rich
+    versus upside calls. The trade is:
+    sell OTM put, buy OTM call, and delta hedge.
     """
 
-    if z_score > entry_threshold:
-        return "SELL_RICH_OTM_PUT_BUY_OTM_CALL"
+    if pd.isna(z_score):
+        return "HOLD_POSITION" if in_position else "NO_TRADE"
 
-    if z_score < -entry_threshold:
-        return "BUY_CHEAP_OTM_PUT_SELL_OTM_CALL"
+    if in_position:
+        if should_exit_trade(z_score, exit_threshold=exit_threshold):
+            return "EXIT_RISK_REVERSAL"
 
-    if abs(z_score) < exit_threshold:
-        return "EXIT_OR_HOLD_NO_POSITION"
+        return "HOLD_POSITION"
+
+    if should_enter_trade(z_score, entry_threshold=entry_threshold):
+        return "ENTER_RISK_REVERSAL"
 
     return "NO_TRADE"
 
+
+def should_enter_trade(
+    z_score: float,
+    entry_threshold: float = 2.0,
+) -> bool:
+    """
+    Return True when skew is rich enough to open the risk reversal.
+
+    Entry condition:
+    Skew_Z > entry_threshold
+    """
+
+    return pd.notna(z_score) and z_score > entry_threshold
+
+
+def should_exit_trade(
+    z_score: float,
+    exit_threshold: float = 0.5,
+) -> bool:
+    """
+    Return True when skew has normalized enough to close the risk reversal.
+
+    Exit condition:
+    Skew_Z < exit_threshold
+    """
+
+    return pd.notna(z_score) and z_score < exit_threshold
+
+
+def get_z_score_trade_action(
+    z_score: float,
+    in_position: bool,
+    entry_z: float = 2.0,
+    exit_z: float = 0.5,
+) -> dict:
+    """
+    Return a structured Z-score trading decision.
+
+    This is useful in a backtest or live loop because it includes both the
+    action and the reason for that action.
+    """
+
+    signal = generate_skew_signal(
+        z_score=z_score,
+        entry_threshold=entry_z,
+        exit_threshold=exit_z,
+        in_position=in_position,
+    )
+
+    if signal == "ENTER_RISK_REVERSAL":
+        reason = f"Skew_Z {z_score:.2f} is above entry threshold {entry_z:.2f}."
+    elif signal == "EXIT_RISK_REVERSAL":
+        reason = f"Skew_Z {z_score:.2f} is below exit threshold {exit_z:.2f}."
+    elif signal == "HOLD_POSITION":
+        reason = "Trade is open and skew has not normalized yet."
+    else:
+        reason = "No open trade and entry threshold has not been reached."
+
+    return {
+        "Signal": signal,
+        "Z_Score": z_score,
+        "In_Position": in_position,
+        "Entry_Z": entry_z,
+        "Exit_Z": exit_z,
+        "Reason": reason,
+    }
 
 
 def get_target_otm_call_row(
@@ -198,8 +293,8 @@ def construct_delta_hedged_risk_reversal(
     put_iv = float(put_row["Calculated_IV"])
     call_iv = float(call_row["Calculated_IV"])
 
-    put_mid = float(put_row["Mid"])
-    call_mid = float(call_row["Mid"])
+    put_mid = get_option_price_from_row(put_row)
+    call_mid = get_option_price_from_row(call_row)
 
     # Long put delta is negative.
     # Since we are SHORT the put, multiply by -1.
@@ -260,3 +355,39 @@ def construct_delta_hedged_risk_reversal(
         "Net_Premium_Per_Share": net_premium_per_share,
         "Net_Premium_Total": net_premium_total,
     }
+
+
+def calculate_hedge_shares(
+    spot: float,
+    put_strike: float,
+    call_strike: float,
+    T: float,
+    risk_free_rate: float,
+    put_iv: float,
+    call_iv: float,
+    contracts: int = 1,
+) -> float:
+    """
+    Calculate SPY shares needed to delta hedge short put + long call.
+    """
+
+    short_put_delta = -put_delta(
+        S=spot,
+        K=put_strike,
+        T=T,
+        r=risk_free_rate,
+        sigma=put_iv,
+    )
+
+    long_call_delta = call_delta(
+        S=spot,
+        K=call_strike,
+        T=T,
+        r=risk_free_rate,
+        sigma=call_iv,
+    )
+
+    net_option_delta = short_put_delta + long_call_delta
+    net_share_delta = net_option_delta * 100 * contracts
+
+    return -net_share_delta

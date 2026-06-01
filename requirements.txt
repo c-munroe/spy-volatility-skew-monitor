@@ -3,3 +3,4 @@ pandas
 yfinance
 scipy
 matplotlib
+dotenv

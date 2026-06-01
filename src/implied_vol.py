@@ -101,7 +101,7 @@ def implied_vol_newton(
 
         sigma = sigma - price_diff / option_vega
 
-        if sigma <= 0 or pd.isna(sigma):
-            sigma = 0.01
+        if sigma <= 0 or pd.isna(sigma) or sigma > 5:
+            return float("nan")
 
     return sigma

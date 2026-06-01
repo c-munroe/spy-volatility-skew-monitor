@@ -9,7 +9,7 @@ Strategy:
 - Measure risk reversal skew = OTM Put IV - OTM Call IV
 - Enter when risk reversal skew Z-score is unusually high
 - Trade: sell OTM put, buy OTM call, delta hedge with SPY shares
-- Exit after fixed holding period
+- Exit when skew normalizes or max holding period is reached
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from greeks import call_delta, put_delta
+from skew_strategy import calculate_hedge_shares, get_z_score_trade_action
 from implied_vol import implied_vol_newton
 from price_data import load_price_data
 
@@ -298,20 +298,22 @@ def run_backtest(
     initial_capital: float = 100_000,
     contracts: int = 1,
     entry_z: float = 2.0,
-    holding_period_days: int = 5,
+    exit_z: float = 0.5,
+    max_holding_period_days: int = 10,
     risk_free_rate: float = 0.05,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Run risk reversal backtest.
 
     Entry:
+    - Enter when Skew_Z > entry_z
     - Sell selected OTM put
     - Buy selected OTM call
     - Delta hedge with SPY shares
 
     Exit:
-    - Close same put and call contracts after holding_period_days
-    - Unwind hedge
+    - Exit when Skew_Z < exit_z
+    - Or exit when max_holding_period_days is reached
     """
 
     portfolio_value = initial_capital
@@ -323,11 +325,27 @@ def run_backtest(
 
     for i, today in skew_history.iterrows():
         current_date = today["date"]
+        z = today["Skew_Z"]
 
+        # -------------------------
+        # EXIT LOGIC
+        # -------------------------
         if open_trade is not None:
             days_held = i - open_trade["entry_index"]
 
-            if days_held >= holding_period_days:
+            action = get_z_score_trade_action(
+                z_score=z,
+                in_position=True,
+                entry_z=entry_z,
+                exit_z=exit_z,
+            )
+
+            should_exit = (
+                action["Signal"] == "EXIT_RISK_REVERSAL"
+                or days_held >= max_holding_period_days
+            )
+
+            if should_exit:
                 exit_put_price = get_option_price(
                     options_df,
                     open_trade["put_ticker"],
@@ -355,6 +373,7 @@ def run_backtest(
                     exit_call_price - open_trade["entry_call_price"]
                 ) * 100 * contracts
 
+                # Hedge PnL from SPY share position.
                 hedge_pnl = open_trade["hedge_shares"] * (
                     exit_spot - open_trade["entry_spot"]
                 )
@@ -362,16 +381,26 @@ def run_backtest(
                 total_pnl = put_pnl + call_pnl + hedge_pnl
                 portfolio_value += total_pnl
 
+                exit_reason = (
+                    "Skew normalized"
+                    if action["Signal"] == "EXIT_RISK_REVERSAL"
+                    else "Max holding period reached"
+                )
+
                 trade_rows.append(
                     {
                         "Entry_Date": open_trade["entry_date"],
                         "Exit_Date": current_date,
+                        "Exit_Reason": exit_reason,
+                        "Days_Held": days_held,
                         "Put_Ticker": open_trade["put_ticker"],
                         "Call_Ticker": open_trade["call_ticker"],
                         "Entry_Spot": open_trade["entry_spot"],
                         "Exit_Spot": exit_spot,
                         "Entry_Z": open_trade["entry_z"],
+                        "Exit_Z": float(z) if pd.notna(z) else np.nan,
                         "Entry_RR_Skew": open_trade["entry_rr_skew"],
+                        "Exit_RR_Skew": float(today["Risk_Reversal_Skew"]),
                         "Put_PnL": put_pnl,
                         "Call_PnL": call_pnl,
                         "Hedge_PnL": hedge_pnl,
@@ -382,41 +411,38 @@ def run_backtest(
 
                 print(
                     f"{current_date.date()} CLOSE | "
+                    f"Reason: {exit_reason} | "
                     f"PnL: ${total_pnl:,.2f} | "
                     f"Portfolio: ${portfolio_value:,.2f}"
                 )
 
                 open_trade = None
 
+        # -------------------------
+        # ENTRY LOGIC
+        # -------------------------
         if open_trade is None:
-            z = today["Skew_Z"]
+            action = get_z_score_trade_action(
+                z_score=z,
+                in_position=False,
+                entry_z=entry_z,
+                exit_z=exit_z,
+            )
 
-            if pd.notna(z) and z > entry_z:
+            if action["Signal"] == "ENTER_RISK_REVERSAL":
                 spot = float(today["Spot"])
                 T = float(today["T"])
 
-                put_delta_long = put_delta(
-                    S=spot,
-                    K=float(today["Sell_Put_Strike"]),
+                hedge_shares = calculate_hedge_shares(
+                    spot=spot,
+                    put_strike=float(today["Sell_Put_Strike"]),
+                    call_strike=float(today["Buy_Call_Strike"]),
                     T=T,
-                    r=risk_free_rate,
-                    sigma=float(today["Sell_Put_IV"]),
+                    risk_free_rate=risk_free_rate,
+                    put_iv=float(today["Sell_Put_IV"]),
+                    call_iv=float(today["Buy_Call_IV"]),
+                    contracts=contracts,
                 )
-
-                call_delta_long = call_delta(
-                    S=spot,
-                    K=float(today["Buy_Call_Strike"]),
-                    T=T,
-                    r=risk_free_rate,
-                    sigma=float(today["Buy_Call_IV"]),
-                )
-
-                # We are short the put, so flip put delta.
-                short_put_delta = -put_delta_long
-                long_call_delta = call_delta_long
-
-                net_option_delta = short_put_delta + long_call_delta
-                hedge_shares = -net_option_delta * 100 * contracts
 
                 open_trade = {
                     "entry_index": i,
@@ -531,14 +557,15 @@ if __name__ == "__main__":
     )
 
     equity_curve, trades = run_backtest(
-        skew_history=skew_history,
-        options_df=options_df,
-        initial_capital=initial_capital,
-        contracts=1,
-        entry_z=2.0,
-        holding_period_days=5,
-        risk_free_rate=0.05,
-    )
+    skew_history=skew_history,
+    options_df=options_df,
+    initial_capital=initial_capital,
+    contracts=1,
+    entry_z=2.0,
+    exit_z=0.5,
+    max_holding_period_days=10,
+    risk_free_rate=0.05,
+)
 
     Path("data/processed").mkdir(parents=True, exist_ok=True)
 
