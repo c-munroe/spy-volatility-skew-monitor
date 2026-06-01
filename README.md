@@ -175,6 +175,14 @@ Net_Premium_Total
 
 This project does not execute live trades through a brokerage API. It constructs and analyzes the trade, including the option legs and required delta hedge. The output is intended for research, learning, and options strategy analysis.
 
+## Historical Backtest
+
+The project includes a prototype historical backtest using contract-level daily options aggregate bars. The backtest constructs a SPY risk reversal by selling an OTM put, buying an OTM call, and delta hedging with SPY shares at trade entry.
+
+Raw historical options CSVs are not included in this repository because they are locally downloaded market data. The backtest engine is structured to read local contract-level option files from `data/raw/options/`, which is excluded from Git tracking.
+
+Initial sample results using one SPY expiration and a small strike grid generated 5 trades, all profitable, with a final portfolio value of $100,246.14 from $100,000 initial capital. This result is a prototype sample and not a production-grade strategy validation.
+
 ## Limitations
 
 This project focuses on live options-chain analytics and trade construction. It does not include a full historical PnL backtest because free data sources such as `yfinance` do not provide reliable historical options chain data. A true historical backtest would require historical bid/ask quotes, implied volatilities, Greeks, and prices for the same option contracts from entry to exit.
