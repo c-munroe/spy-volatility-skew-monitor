@@ -20,3 +20,5 @@ __pycache__/
 data/
 
 src/download_option_data.py
+
+spy_vol_skew.csv
